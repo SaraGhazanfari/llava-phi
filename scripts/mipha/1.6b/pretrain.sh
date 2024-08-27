@@ -12,6 +12,8 @@ vision_encoder=google/siglip-so400m-patch14-384
 model_dir=microsoft/phi-1_5
 outputdir=./ckpts/checkpoints-siglip/phi_2/MiphaPhi2-v0-1.6b-pretrain
 
+singularity exec --nv --overlay /scratch/sg7457/aa10460/pytorch-example/my_pytorch.ext3:ro \
+ /scratch/work/public/singularity/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif /bin/bash -c 'source /ext3/env.sh;
 deepspeed --master_port 29600 mipha/train/train.py \
     --deepspeed ./scripts/zero2.json \
     --model_name_or_path $model_dir \
@@ -44,6 +46,6 @@ deepspeed --master_port 29600 mipha/train/train.py \
     --dataloader_num_workers 4 \
     --lazy_preprocess True \
     --report_to wandb \
-    --cache_dir ./
+    --cache_dir ./'
 
 cp $vision_encoder/preprocessor_config.json  $outputdir
