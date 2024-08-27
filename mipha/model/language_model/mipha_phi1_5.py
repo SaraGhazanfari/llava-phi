@@ -1,17 +1,15 @@
-import os
 from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
-
 from transformers import AutoConfig, AutoModelForCausalLM
-from .phi1_5.modeling_phi import PhiModel, PhiPreTrainedModel
-
 from transformers.modeling_outputs import CausalLMOutputWithPast
-from ..mipha_arch  import MiphaMetaModel, MiphaMetaForCausalLM
 from transformers.utils import logging
+
 from .configuration_mipha import MiphaPhi15Config
+from .phi1_5.modeling_phi import PhiModel, PhiPreTrainedModel
+from ..mipha_arch import MiphaMetaModel, MiphaMetaForCausalLM
 
 logger = logging.get_logger(__name__)
 
@@ -49,6 +47,7 @@ class MiphaPhi15ForCausalLM(PhiPreTrainedModel, MiphaMetaForCausalLM):
             output_hidden_states: Optional[bool] = None,
             images: Optional[torch.FloatTensor] = None,
             return_dict: Optional[bool] = None,
+            prompt_input_ids=None
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -68,7 +67,8 @@ class MiphaPhi15ForCausalLM(PhiPreTrainedModel, MiphaMetaForCausalLM):
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict
+            return_dict=return_dict,
+            prompt_input_ids=prompt_input_ids
         )
 
         hidden_states = outputs[0]

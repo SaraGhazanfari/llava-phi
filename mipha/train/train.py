@@ -23,14 +23,12 @@ import copy
 from dataclasses import dataclass, field
 import json
 import logging
-import pathlib
-from typing import Dict, Optional, Sequence, List
-import sys
+from typing import Dict, Optional, Sequence
 import torch
 
 import transformers
 
-from mipha.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, \
+from mipha.constants import IGNORE_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, \
     DEFAULT_IM_END_TOKEN
 from torch.utils.data import Dataset
 from mipha.train.mipha_trainer import MiphaTrainer
@@ -38,8 +36,7 @@ from mipha.train.mipha_trainer import MiphaTrainer
 from mipha import conversation as conversation_lib
 from mipha.model import *
 from mipha.mm_utils import tokenizer_image_token
-from transformers import CLIPVisionConfig, SiglipVisionConfig, Dinov2Config, \
-    CLIPImageProcessor, SiglipImageProcessor, BitImageProcessor
+from transformers import CLIPImageProcessor, SiglipImageProcessor, BitImageProcessor
 
 from PIL import Image
 
@@ -535,8 +532,8 @@ def preprocess_gemma(
     assert conv.sep_style == conversation_lib.SeparatorStyle.GEMMA
 
     # Mask targets
-    sep = conv.sep + conv.roles[1] + "\n"              # <start_of_turn>model\n
-    round_sep ="\n" + conv.sep + conv.roles[0] + "\n"  # \n<start_of_turn>user\n
+    sep = conv.sep + conv.roles[1] + "\n"  # <start_of_turn>model\n
+    round_sep = "\n" + conv.sep + conv.roles[0] + "\n"  # \n<start_of_turn>user\n
     for conversation, target in zip(conversations, targets):
         total_len = int(target.ne(tokenizer.pad_token_id).sum())
         rounds = conversation.split(round_sep)
@@ -553,7 +550,7 @@ def preprocess_gemma(
                 break
             parts[0] += sep
             if has_image:
-                round_len = len(tokenizer_image_token(rou, tokenizer)) - 1  #  -1 for <bos>
+                round_len = len(tokenizer_image_token(rou, tokenizer)) - 1  # -1 for <bos>
                 instruction_len = len(tokenizer_image_token(parts[0], tokenizer)) - 1  # -1 for <bos>
             else:
                 round_len = len(tokenizer(rou).input_ids) - 1  # -1 for <bos>
@@ -577,6 +574,7 @@ def preprocess_gemma(
         input_ids=input_ids,
         labels=targets,
     )
+
 
 def preprocess_plain(
         sources: Sequence[str],
@@ -630,7 +628,8 @@ class LazySupervisedDataset(Dataset):
 
     def __init__(self, data_path: str,
                  tokenizer: transformers.PreTrainedTokenizer,
-                 data_args: DataArguments):
+                 data_args: DataArguments,
+                 prompt_tokenizer=None):
         super(LazySupervisedDataset, self).__init__()
         list_data_dict = json.load(open(data_path, "r"))
 
@@ -638,6 +637,7 @@ class LazySupervisedDataset(Dataset):
         self.tokenizer = tokenizer
         self.list_data_dict = list_data_dict
         self.data_args = data_args
+        self.prompt_tokenizer = prompt_tokenizer
 
     def __len__(self):
         return len(self.list_data_dict)
@@ -692,13 +692,15 @@ class LazySupervisedDataset(Dataset):
                 self.data_args)
         else:
             sources = copy.deepcopy([e["conversations"] for e in sources])
+        prompt = preprocess_vision_prompt(sources, self.prompt_tokenizer)
         data_dict = preprocess(
             sources,
             self.tokenizer,
             has_image=('image' in self.list_data_dict[i]))
         if isinstance(i, int):
             data_dict = dict(input_ids=data_dict["input_ids"][0],
-                             labels=data_dict["labels"][0])
+                             labels=data_dict["labels"][0],
+                             prompt_input_ids=prompt)
 
         # image exist in the data
         if 'image' in self.list_data_dict[i]:
@@ -711,6 +713,25 @@ class LazySupervisedDataset(Dataset):
                 crop_size = self.data_args.image_processor.size
             data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
         return data_dict
+
+
+def preprocess_vision_prompt(sources, prompt_tokenizer):
+    assert len(sources) == 1
+    sources = sources[0]
+    if len(sources) == 2:
+        prompt = sources[0]['value'].replace('\n<image>', '').replace('<image>\n', '')
+        return prompt_tokenizer(prompt)
+    all_prompts = list()
+    for source in sources:
+        if source['from'] == 'human':
+            if ':' in source['value']:
+                all_prompts.append(source['value'].split(':')[1].lstrip())
+            else:
+                all_prompts.append(source['value'])
+
+    zero_counts = (prompt_tokenizer(all_prompts) == 0).sum(dim=1)
+    row_with_most_zeros = torch.argmax(zero_counts)
+    return prompt_tokenizer(all_prompts[row_with_most_zeros])
 
 
 @dataclass
@@ -734,10 +755,12 @@ class DataCollatorForSupervisedDataset(object):
                                                  padding_value=IGNORE_INDEX)
         input_ids = input_ids[:, :self.tokenizer.model_max_length]
         labels = labels[:, :self.tokenizer.model_max_length]
+        prompt_input_ids = [instance['prompt_input_ids'] for instance in instances]
         batch = dict(
             input_ids=input_ids,
             labels=labels,
-            attention_mask=input_ids.ne(self.tokenizer.pad_token_id)
+            attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
+            prompt_input_ids=torch.cat(prompt_input_ids, dim=0)
             # attention_mask=input_ids.ne(temp_pad_token_id),
         )
 
@@ -751,12 +774,13 @@ class DataCollatorForSupervisedDataset(object):
         return batch
 
 
-def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
+def make_supervised_data_module(prompt_tokenizer, tokenizer: transformers.PreTrainedTokenizer,
                                 data_args) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
     train_dataset = LazySupervisedDataset(tokenizer=tokenizer,
                                           data_path=data_args.data_path,
-                                          data_args=data_args)
+                                          data_args=data_args,
+                                          prompt_tokenizer=prompt_tokenizer)
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
     return dict(train_dataset=train_dataset,
                 eval_dataset=None,
@@ -902,12 +926,18 @@ def train():
     model.config.tokenizer_model_max_length = tokenizer.model_max_length
 
     model.config.tune_mm_mlp_adapter = model_args.tune_mm_mlp_adapter = training_args.tune_mm_mlp_adapter
+    modules = [model.get_model().mm_projector]
+    if hasattr(model.get_model().get_vision_tower(), 'text_projection'):
+        modules.extend([model.get_model().get_vision_tower().text_projection,
+                        model.get_model().get_vision_tower().image_text_infusion])
     if not model_args.tune_mm_mlp_adapter:
-        for p in model.get_model().mm_projector.parameters():
-            p.requires_grad = False
+        for module in modules:
+            for p in module.parameters():
+                p.requires_grad = False
     else:
-        for p in model.get_model().mm_projector.parameters():
-            p.requires_grad = True
+        for module in modules:
+            for p in module.parameters():
+                p.requires_grad = True
 
     model.config.freeze_vision_tower = model_args.freeze_vision_tower = training_args.freeze_vision_tower
     if model_args.freeze_vision_tower:
@@ -950,7 +980,8 @@ def train():
                         module = module.to(torch.bfloat16)
 
     data_module = make_supervised_data_module(tokenizer=tokenizer,
-                                              data_args=data_args)
+                                              data_args=data_args,
+                                              prompt_tokenizer=vision_tower.tokenizer)
 
     trainer = MiphaTrainer(model=model,
                            tokenizer=tokenizer,
