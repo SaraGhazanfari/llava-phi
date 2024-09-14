@@ -720,18 +720,25 @@ def preprocess_vision_prompt(sources, prompt_tokenizer):
     sources = sources[0]
     if len(sources) == 2:
         prompt = sources[0]['value'].replace('\n<image>', '').replace('<image>\n', '')
-        return prompt_tokenizer(prompt)
+        prompt = prompt_tokenizer(prompt, return_tensors="pt")['input_ids'][:, :64]
+        return torch.cat((prompt, torch.zeros((1, 64 - prompt.shape[1]), device=prompt.device, dtype=prompt.dtype)), dim=1)
     all_prompts = list()
     for source in sources:
-        if source['from'] == 'human':
+        if source['from'] == 'human' and '[' not in source['value']:
+            source['value'] = source['value'].replace('\nAnswer the question using a single word or phrase.', '')
             if ':' in source['value']:
                 all_prompts.append(source['value'].split(':')[1].lstrip())
             else:
                 all_prompts.append(source['value'])
 
-    zero_counts = (prompt_tokenizer(all_prompts) == 0).sum(dim=1)
-    row_with_most_zeros = torch.argmax(zero_counts)
-    return prompt_tokenizer(all_prompts[row_with_most_zeros])
+    if len(all_prompts) == 0:
+        all_prompts = 'Describe this image'
+    all_prompts = prompt_tokenizer(all_prompts, return_tensors="pt", padding=True)['input_ids'][:, :64]
+    one_counts = (all_prompts == 1).sum(dim=1)
+    row_with_most_zeros = torch.argmin(one_counts)
+    prompt = all_prompts[row_with_most_zeros].unsqueeze(0)
+
+    return torch.cat((prompt, torch.zeros((1, 64 - prompt.shape[1]), device=prompt.device, dtype=prompt.dtype)), dim=1) 
 
 
 @dataclass
@@ -755,7 +762,9 @@ class DataCollatorForSupervisedDataset(object):
                                                  padding_value=IGNORE_INDEX)
         input_ids = input_ids[:, :self.tokenizer.model_max_length]
         labels = labels[:, :self.tokenizer.model_max_length]
+        
         prompt_input_ids = [instance['prompt_input_ids'] for instance in instances]
+        
         batch = dict(
             input_ids=input_ids,
             labels=labels,
@@ -824,7 +833,8 @@ def train():
             attn_implementation="flash_attention_2",
             **bnb_model_from_pretrained_args
         )
-    elif "phi2" in model_args.model_name_or_path or "phi-2" in model_args.model_name_or_path:
+    elif "phi2" in model_args.model_name_or_path or "phi-2" in model_args.model_name_or_path \
+        or "phi_2" in model_args.model_name_or_path:
         config = MiphaPhiConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
         model = MiphaPhiForCausalLM.from_pretrained(
             model_args.model_name_or_path,
@@ -834,6 +844,15 @@ def train():
             # attn_implementation="flash_attention_2",
             **bnb_model_from_pretrained_args
         )
+    elif "phi-1_5" in model_args.model_name_or_path.lower():
+        config = MiphaPhi15Config.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
+        model = MiphaPhi15ForCausalLM.from_pretrained(
+            model_args.model_name_or_path,
+            config=config,
+            cache_dir=training_args.cache_dir,
+            trust_remote_code=True,
+            use_safetensors=True,
+            **bnb_model_from_pretrained_args)
     elif "gemma" in model_args.model_name_or_path:
         config = MiphaGemmaConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
         model = MiphaGemmaForCausalLM.from_pretrained(
@@ -888,7 +907,6 @@ def train():
                 model.to(torch.float16)
         rank0_print("Adding LoRA adapters...")
         model = get_peft_model(model, lora_config)
-        print(model)
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
@@ -926,6 +944,15 @@ def train():
     model.config.tokenizer_model_max_length = tokenizer.model_max_length
 
     model.config.tune_mm_mlp_adapter = model_args.tune_mm_mlp_adapter = training_args.tune_mm_mlp_adapter
+
+    model.config.freeze_vision_tower = model_args.freeze_vision_tower = training_args.freeze_vision_tower
+    if model_args.freeze_vision_tower:
+        for p in model.get_model().vision_tower.parameters():
+            p.requires_grad = False
+    else:
+        for p in model.get_model().vision_tower.parameters():
+            p.requires_grad = True
+            
     modules = [model.get_model().mm_projector]
     if hasattr(model.get_model().get_vision_tower(), 'text_projection'):
         modules.extend([model.get_model().get_vision_tower().text_projection,
@@ -938,15 +965,7 @@ def train():
         for module in modules:
             for p in module.parameters():
                 p.requires_grad = True
-
-    model.config.freeze_vision_tower = model_args.freeze_vision_tower = training_args.freeze_vision_tower
-    if model_args.freeze_vision_tower:
-        for p in model.get_model().vision_tower.parameters():
-            p.requires_grad = False
-    else:
-        for p in model.get_model().vision_tower.parameters():
-            p.requires_grad = True
-
+                
     def calculate_trainable_parameters_percentage(model):
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)

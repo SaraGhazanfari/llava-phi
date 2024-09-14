@@ -28,6 +28,7 @@ from mipha.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_PATCH
 
 class MiphaMetaModel:
     def __init__(self, config):
+       
         super(MiphaMetaModel, self).__init__(config)
         if "clip" in config.vision_config["vision_tower"]["vision_model_name_or_path"]:
             self.vision_tower = CLIPVisionTower(

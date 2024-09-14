@@ -1,4 +1,4 @@
-import torch
+import torch, os
 import torch.nn as nn
 from transformers import AutoTokenizer, SiglipTextModel
 from transformers.models.siglip import SiglipPreTrainedModel
@@ -14,6 +14,9 @@ class SiglipVisionTower(SiglipPreTrainedModel):
         super().__init__(config)
 
         self.vision_model = SiglipVisionTransformer(config)
+        self.text_module_path = getattr(config, 'output_dir', None)
+        config = config.__dict__
+        
         self.text_encoder = SiglipTextModel.from_pretrained(config['vision_model_name_or_path'])
         self.tokenizer = AutoTokenizer.from_pretrained(config['vision_model_name_or_path'])
         self.post_init()
@@ -22,10 +25,10 @@ class SiglipVisionTower(SiglipPreTrainedModel):
 
     def create_text_modules(self):
 
-        self.text_projection = nn.Sequential(*[nn.Linear(self.text_encoder.config.hidden_size, self.config.hidden_size,
-                                                         device=self.device), nn.GELU()])
+        self.text_projection = nn.Linear(self.text_encoder.config.hidden_size, self.config.hidden_size,
+                                                         device=self.device)
         num_image_tokens = int(self.config.image_size / self.config.patch_size) ** 2
-        num_text_tokens = 77
+        num_text_tokens = 64
         fusion_parameter = torch.zeros((num_image_tokens + num_text_tokens, num_image_tokens), dtype=self.dtype,
                                        device=self.device)
         fusion_parameter[:num_image_tokens, :num_image_tokens] = torch.eye(num_image_tokens, dtype=self.dtype,
@@ -38,7 +41,8 @@ class SiglipVisionTower(SiglipPreTrainedModel):
 
     def load_text_modules(self):
         if self.text_module_path:
-            self.text_module_path = os.path.join('/'.join(self.text_module_path.split('/')[:-1]), 'vision_tower.bin')
+            self.text_module_path = self.text_module_path.replace('finetune', 'pretrain')
+            self.text_module_path = os.path.join(self.text_module_path, 'vision_tower.bin')
             state_dict = torch.load(self.text_module_path)
             text_projection_state_dict = dict()
             image_text_infusion_dict = dict()
@@ -67,8 +71,9 @@ class SiglipVisionTower(SiglipPreTrainedModel):
         return image_features
 
     def forward(self, images, instruct=None):
+        
         text_features = self.text_encoder(instruct.to(device=self.device), output_hidden_states=True).hidden_states[
-            self.select_layer]
+            self.config.mm_vision_select_layer]
         if type(images) is list:
             image_features = []
             for image in images:
@@ -80,8 +85,7 @@ class SiglipVisionTower(SiglipPreTrainedModel):
             image_forward_outs = self.vision_model(images.to(device=self.device, dtype=self.dtype),
                                                    output_hidden_states=True)
             image_features = self.feature_select(image_forward_outs).to(images.dtype)
-
-        text_features = self.text_projection(text_features).to(self.dtype)
+        text_features = nn.GELU()(self.text_projection(text_features).to(self.dtype))
         infused_image_features = torch.cat((image_features, text_features), dim=1)
         infused_image_features = self.image_text_infusion(infused_image_features.permute(0, 2, 1)).permute(0, 2, 1)
         return infused_image_features
