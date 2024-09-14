@@ -14,11 +14,11 @@ VIT=siglip
 MODELDIR=./ckpts/checkpoints-$VIT/$SLM/$model_name
 
 for IDX in $(seq 0 $((CHUNKS-1))); do
-    CUDA_VISIBLE_DEVICES=${GPULIST[$IDX]} python -m mipha.eval.model_vqa_loader \
+    CUDA_VISIBLE_DEVICES=${GPULIST[$IDX]} $SCRATCH/code/llava-phi/pytorch-example/python -m mipha.eval.model_vqa_loader \
         --model-path $MODELDIR \
-        --question-file ./playground/data/eval/seed_bench/llava-seed-bench.jsonl \
-        --image-folder ./playground/data/eval/seed_bench \
-        --answers-file ./playground/data/eval/seed_bench/answers/$CKPT/${CHUNKS}_${IDX}.jsonl \
+        --question-file $VAST/eval/seed_bench/llava-seed-bench.jsonl \
+        --image-folder $VAST/eval/seed_bench \
+        --answers-file $VAST/eval/seed_bench/answers/$CKPT/${CHUNKS}_${IDX}.jsonl \
         --num-chunks $CHUNKS \
         --chunk-idx $IDX \
         --temperature 0 \
@@ -27,19 +27,19 @@ done
 
 wait
 
-output_file=./playground/data/eval/seed_bench/answers/$CKPT/merge.jsonl
+output_file=$VAST/eval/seed_bench/answers/$CKPT/merge.jsonl
 
 # Clear out the output file if it exists.
 > "$output_file"
 
 # Loop through the indices and concatenate each file.
 for IDX in $(seq 0 $((CHUNKS-1))); do
-    cat ./playground/data/eval/seed_bench/answers/$CKPT/${CHUNKS}_${IDX}.jsonl >> "$output_file"
+    cat $VAST/eval/seed_bench/answers/$CKPT/${CHUNKS}_${IDX}.jsonl >> "$output_file"
 done
 
 # Evaluate
-python scripts/convert_seed_for_submission.py \
-    --annotation-file ./playground/data/eval/seed_bench/SEED-Bench.json \
+$SCRATCH/code/llava-phi/pytorch-example/python scripts/convert_seed_for_submission.py \
+    --annotation-file $VAST/eval/seed_bench/SEED-Bench.json \
     --result-file $output_file \
-    --result-upload-file ./playground/data/eval/seed_bench/answers_upload/$model_name.jsonl
+    --result-upload-file $VAST/eval/seed_bench/answers_upload/$model_name.jsonl
 

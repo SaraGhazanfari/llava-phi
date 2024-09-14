@@ -6,17 +6,17 @@ SLM=phi_2
 VIT=siglip
 MODELDIR=./ckpts/checkpoints-$VIT/$SLM/$model_name
 
-python -m mipha.eval.model_vqa \
+$SCRATCH/code/llava-phi/pytorch-example/python -m mipha.eval.model_vqa \
     --model-path $MODELDIR \
-    --question-file ./playground/data/eval/mm-vet/llava-mm-vet.jsonl \
-    --image-folder ./playground/data/eval/mm-vet/images \
-    --answers-file ./playground/data/eval/mm-vet/answers/$model_name.jsonl \
+    --question-file $VAST/eval/mm-vet/llava-mm-vet.jsonl \
+    --image-folder $VAST/eval/mm-vet/images \
+    --answers-file $VAST/eval/mm-vet/answers/$model_name.jsonl \
     --temperature 0 \
     --conv-mode phi
 
-mkdir -p ./playground/data/eval/mm-vet/results
+mkdir -p $VAST/eval/mm-vet/results
 
-python scripts/convert_mmvet_for_eval.py \
-    --src ./playground/data/eval/mm-vet/answers/$model_name.jsonl \
-    --dst ./playground/data/eval/mm-vet/results/$model_name.json
+$SCRATCH/code/llava-phi/pytorch-example/python scripts/convert_mmvet_for_eval.py \
+    --src $VAST/eval/mm-vet/answers/$model_name.jsonl \
+    --dst $VAST/eval/mm-vet/results/$model_name.json
 

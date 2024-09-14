@@ -6,14 +6,14 @@ SLM=phi_2
 VIT=siglip
 MODELDIR=./ckpts/checkpoints-$VIT/$SLM/$model_name
 
-python -m mipha.eval.model_vqa_loader \
+$SCRATCH/code/llava-phi/pytorch-example/python -m mipha.eval.model_vqa_loader \
     --model-path $MODELDIR \
-    --question-file ./playground/data/eval/textvqa/llava_textvqa_val_v051_ocr.jsonl \
+    --question-file $VAST/eval/textvqa/llava_textvqa_val_v051_ocr.jsonl \
     --image-folder /data/team/zhumj/data/finetune/data/textvqa/train_images \
-    --answers-file ./playground/data/eval/textvqa/answers/$model_name.jsonl \
+    --answers-file $VAST/eval/textvqa/answers/$model_name.jsonl \
     --temperature 0 \
     --conv-mode v0
 
-python -m mipha.eval.eval_textvqa \
-    --annotation-file ./playground/data/eval/textvqa/TextVQA_0.5.1_val.json \
-    --result-file ./playground/data/eval/textvqa/answers/$model_name.jsonl
+$SCRATCH/code/llava-phi/pytorch-example/python -m mipha.eval.eval_textvqa \
+    --annotation-file $VAST/eval/textvqa/TextVQA_0.5.1_val.json \
+    --result-file $VAST/eval/textvqa/answers/$model_name.jsonl
