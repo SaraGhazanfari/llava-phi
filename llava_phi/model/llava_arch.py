@@ -49,13 +49,13 @@ class LlavaMetaForCausalLM(ABC):
     def get_vision_tower(self):
         return self.get_model().get_vision_tower()
 
-    def encode_images(self, images):
-        image_features = self.get_model().get_vision_tower()(images)
+    def encode_images(self, images, instruct):
+        image_features = self.get_model().get_vision_tower()(images, instruct)
         image_features = self.get_model().mm_projector(image_features)
         return image_features
 
     def prepare_inputs_labels_for_multimodal(
-        self, input_ids, attention_mask, past_key_values, labels, images
+        self, input_ids, attention_mask, past_key_values, labels, images, prompt_input_ids
     ):
         vision_tower = self.get_vision_tower()
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
@@ -65,12 +65,12 @@ class LlavaMetaForCausalLM(ABC):
 
         if type(images) is list or images.ndim == 5:
             concat_images = torch.cat([image for image in images], dim=0)
-            image_features = self.encode_images(concat_images)
+            image_features = self.encode_images(concat_images, prompt_input_ids)
             split_sizes = [image.shape[0] for image in images]
             image_features = torch.split(image_features, split_sizes, dim=0)
             image_features = [x.flatten(0, 1) for x in image_features]
         else:
-            image_features = self.encode_images(images)
+            image_features = self.encode_images(images, prompt_input_ids)
 
         new_input_embeds = []
         new_labels = [] if labels is not None else None

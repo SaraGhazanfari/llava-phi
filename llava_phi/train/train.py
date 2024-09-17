@@ -525,13 +525,16 @@ class LazySupervisedDataset(Dataset):
                 self.data_args)
         else:
             sources = copy.deepcopy([e["conversations"] for e in sources])
+            
+        prompt = preprocess_vision_prompt(sources, self.prompt_tokenizer)
         data_dict = preprocess(
             sources,
             self.tokenizer,
             has_image=('image' in self.list_data_dict[i]))
         if isinstance(i, int):
             data_dict = dict(input_ids=data_dict["input_ids"][0],
-                             labels=data_dict["labels"][0])
+                             labels=data_dict["labels"][0],
+                             prompt_input_ids=prompt)
 
         # image exist in the data
         if 'image' in self.list_data_dict[i]:
@@ -541,6 +544,31 @@ class LazySupervisedDataset(Dataset):
             crop_size = self.data_args.image_processor.crop_size
             data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
         return data_dict
+
+def preprocess_vision_prompt(sources, prompt_tokenizer):
+    assert len(sources) == 1
+    sources = sources[0]
+    if len(sources) == 2:
+        prompt = sources[0]['value'].replace('\n<image>', '').replace('<image>\n', '')
+        prompt = prompt_tokenizer(prompt, return_tensors="pt")['input_ids'][:, :64]
+        return torch.cat((prompt, torch.zeros((1, 64 - prompt.shape[1]), device=prompt.device, dtype=prompt.dtype)), dim=1)
+    all_prompts = list()
+    for source in sources:
+        if source['from'] == 'human' and '[' not in source['value']:
+            source['value'] = source['value'].replace('\nAnswer the question using a single word or phrase.', '')
+            if ':' in source['value']:
+                all_prompts.append(source['value'].split(':')[1].lstrip())
+            else:
+                all_prompts.append(source['value'])
+
+    if len(all_prompts) == 0:
+        all_prompts = 'Describe this image'
+    all_prompts = prompt_tokenizer(all_prompts, return_tensors="pt", padding=True)['input_ids'][:, :64]
+    one_counts = (all_prompts == 1).sum(dim=1)
+    row_with_most_zeros = torch.argmin(one_counts)
+    prompt = all_prompts[row_with_most_zeros].unsqueeze(0)
+
+    return torch.cat((prompt, torch.zeros((1, 64 - prompt.shape[1]), device=prompt.device, dtype=prompt.dtype)), dim=1) 
 
 
 @dataclass
@@ -564,10 +592,12 @@ class DataCollatorForSupervisedDataset(object):
                                                  padding_value=IGNORE_INDEX)
         input_ids = input_ids[:, :self.tokenizer.model_max_length]
         labels = labels[:, :self.tokenizer.model_max_length]
+        prompt_input_ids = [instance['prompt_input_ids'] for instance in instances]
         batch = dict(
             input_ids=input_ids,
             labels=labels,
-            attention_mask=input_ids.ne(self.tokenizer.pad_token_id)
+            attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
+            prompt_input_ids=torch.cat(prompt_input_ids, dim=0)
             # attention_mask=input_ids.ne(temp_pad_token_id),
         )
 
@@ -758,7 +788,8 @@ def train():
 
     # TODO I dont like auto resume << REMOVE IT AND UNCOMMENT THE ABOVE CODE
     trainer.train()
-
+    torch.save(trainer.model.get_vision_tower().state_dict(), 
+                os.path.join(training_args.output_dir, f'vision_tower.bin'))
     trainer.save_state()
 
     model.config.use_cache = True

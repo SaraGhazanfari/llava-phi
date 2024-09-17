@@ -32,7 +32,7 @@ def eval_model(args):
     model_path = os.path.expanduser(args.model_path)
     model_name = get_model_name_from_path(model_path)
     tokenizer, model, image_processor, context_len = load_pretrained_model(model_path, args.model_base, model_name)
-
+    question_tokenizer = model.get_vision_tower().tokenizer
     questions = [json.loads(q) for q in open(os.path.expanduser(args.question_file), "r")]
     questions = get_chunk(questions, args.num_chunks, args.chunk_idx)
     answers_file = os.path.expanduser(args.answers_file)
@@ -42,6 +42,8 @@ def eval_model(args):
         idx = line["question_id"]
         image_file = line["image"]
         qs = line["text"]
+        prompt_qs = qs.split('\n')[0]
+        prompt_input_ids = question_tokenizer(prompt_qs)
         cur_prompt = qs
         if model.config.mm_use_im_start_end:
             qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + qs
@@ -63,6 +65,7 @@ def eval_model(args):
         stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
 
         with torch.inference_mode():
+            model.prompt_input_ids = prompt_input_ids
             output_ids = model.generate(
                 input_ids,
                 images=image_tensor.unsqueeze(0).half().cuda(),

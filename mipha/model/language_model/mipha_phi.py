@@ -50,8 +50,10 @@ class MiphaPhiForCausalLM(PhiPreTrainedModel, MiphaMetaForCausalLM):
             output_hidden_states: Optional[bool] = None,
             images: Optional[torch.FloatTensor] = None,
             return_dict: Optional[bool] = None,
-            prompt_input_ids: torch.LongTensor = None,
-    ) -> Union[Tuple, CausalLMOutputWithPast]:
+            prompt_input_ids: torch.LongTensor = None) -> Union[Tuple, CausalLMOutputWithPast]:
+        if prompt_input_ids is None:
+            prompt_input_ids = self.prompt_input_ids
+                
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -72,7 +74,7 @@ class MiphaPhiForCausalLM(PhiPreTrainedModel, MiphaMetaForCausalLM):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict
         )
-
+        
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
 
@@ -101,8 +103,48 @@ class MiphaPhiForCausalLM(PhiPreTrainedModel, MiphaMetaForCausalLM):
             attentions=outputs.attentions,
         )
 
+    # @torch.no_grad()
+    # def generate(
+    #         self,
+    #         inputs: Optional[torch.Tensor] = None,
+    #         images: Optional[torch.Tensor] = None,
+    #         image_sizes: Optional[torch.Tensor] = None,
+    #         prompt_input_ids=None,
+    #         **kwargs):
+    #     attention_mask = kwargs.pop("attention_mask", None)
+    #     if "inputs_embeds" in kwargs:
+    #         raise NotImplementedError("`inputs_embeds` is not supported")
+
+    #     if images is not None:
+    #         (input_ids, 
+    #          attention_mask, 
+    #          past_key_values, 
+    #          inputs_embeds, 
+    #          labels
+    #         ) = self.prepare_inputs_labels_for_multimodal(
+    #             input_ids=inputs,
+    #             attention_mask=attention_mask,
+    #             past_key_values=None,
+    #             labels=None,
+    #             images=images,
+    #             prompt_input_ids=prompt_input_ids
+    #         )
+    #     else:
+    #         inputs_embeds = self.get_model().embed_tokens(inputs)
+    #     model_inputs = self.prepare_inputs_for_generation(
+    #         attention_mask=attention_mask,
+    #         inputs_embeds=inputs_embeds,
+    #         **kwargs)
+    #     for key in kwargs.keys():
+    #         if key not in model_inputs:
+    #             model_inputs[key] = kwargs[key]
+                
+    #     return super().generate(**model_inputs)
+            
+
+
     def prepare_inputs_for_generation(
-            self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
+            self, input_ids=None, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
     ):
         if past_key_values:
             input_ids = input_ids[:, -1:]

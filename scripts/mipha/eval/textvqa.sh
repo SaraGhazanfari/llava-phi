@@ -9,7 +9,7 @@ MODELDIR=./ckpts/checkpoints-$VIT/$SLM/$model_name
 $SCRATCH/code/llava-phi/pytorch-example/python -m mipha.eval.model_vqa_loader \
     --model-path $MODELDIR \
     --question-file $VAST/eval/textvqa/llava_textvqa_val_v051_ocr.jsonl \
-    --image-folder /data/team/zhumj/data/finetune/data/textvqa/train_images \
+    --image-folder $VAST/eval/textvqa/train_images \
     --answers-file $VAST/eval/textvqa/answers/$model_name.jsonl \
     --temperature 0 \
     --conv-mode v0

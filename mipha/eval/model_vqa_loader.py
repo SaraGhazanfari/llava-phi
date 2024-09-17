@@ -29,17 +29,27 @@ def get_chunk(lst, n, k):
 
 # Custom dataset class
 class CustomDataset(Dataset):
-    def __init__(self, questions, image_folder, tokenizer, image_processor, model_config):
+    def __init__(self, questions, image_folder, tokenizer, image_processor, 
+                 model_config, question_tokenizer):
         self.questions = questions
         self.image_folder = image_folder
         self.tokenizer = tokenizer
         self.image_processor = image_processor
         self.model_config = model_config
+        self.question_tokenizer = question_tokenizer
 
     def __getitem__(self, index):
         line = self.questions[index]
         image_file = line["image"]
         qs = line["text"]
+        prompt_qs = qs.split('\n')[0]
+        prompt_input_ids = self.question_tokenizer(prompt_qs, 
+                                                   return_tensors='pt')['input_ids']
+        prompt_input_ids=torch.cat((prompt_input_ids, 
+                                    torch.zeros((1, 64 - prompt_input_ids.shape[1]), 
+                                    device=prompt_input_ids.device, 
+                                    dtype=prompt_input_ids.dtype)), dim=1).squeeze(0)
+    
         if self.model_config.mm_use_im_start_end:
             qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + qs
         else:
@@ -54,16 +64,19 @@ class CustomDataset(Dataset):
 
         input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt')
 
-        return input_ids, image_tensor
+        return input_ids, image_tensor, prompt_input_ids
 
     def __len__(self):
         return len(self.questions)
 
 
 # DataLoader
-def create_data_loader(questions, image_folder, tokenizer, image_processor, model_config, batch_size=1, num_workers=4):
+def create_data_loader(questions, image_folder, tokenizer, image_processor, 
+                       model_config, batch_size=1, num_workers=4,
+                       question_tokenizer=None):
     assert batch_size == 1, "batch_size must be 1"
-    dataset = CustomDataset(questions, image_folder, tokenizer, image_processor, model_config)
+    dataset = CustomDataset(questions, image_folder, tokenizer, image_processor, 
+                            model_config, question_tokenizer=question_tokenizer)
     data_loader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False)
     return data_loader
 
@@ -85,21 +98,26 @@ def eval_model(args):
         args.conv_mode = args.conv_mode + '_mmtag'
         print(f'It seems that this is a plain model, but it is not using a mmtag prompt, auto switching to {args.conv_mode}.')
 
-    data_loader = create_data_loader(questions, args.image_folder, tokenizer, image_processor, model.config)
+    data_loader = create_data_loader(questions, args.image_folder, tokenizer, 
+                                     image_processor, model.config, 
+                                     question_tokenizer=model.get_vision_tower().tokenizer)
     conv_ = conv_templates[args.conv_mode].copy()
     stop_str = conv_.sep2
     keywords = [stop_str]
 
-    for (input_ids, image_tensor), line in tqdm(zip(data_loader, questions), total=len(questions)):
+    for (input_ids, image_tensor, prompt_input_ids), line in tqdm(zip(data_loader, questions), total=len(questions)):
         idx = line["question_id"]
         cur_prompt = line["text"]
         
         stop_str = conv_templates[args.conv_mode].sep if conv_templates[args.conv_mode].sep_style != SeparatorStyle.TWO else conv_templates[args.conv_mode].sep2
         input_ids = input_ids.to(device='cuda', non_blocking=True)
+        prompt_input_ids = prompt_input_ids.to(device='cuda', non_blocking=True)
         stopping_criteria = [KeywordsStoppingCriteria(keywords, tokenizer, input_ids)]
+        
         with torch.inference_mode():
+            model.prompt_input_ids = prompt_input_ids
             output_ids = model.generate(
-                input_ids,
+                input_ids=input_ids,#torch.cat((input_ids, prompt_input_ids), dim=1),
                 images=image_tensor.to(dtype=torch.float16, device='cuda', non_blocking=True),
                 do_sample=True if args.temperature > 0 else False,
                 temperature=args.temperature,
@@ -111,11 +129,11 @@ def eval_model(args):
                 pad_token_id=tokenizer.eos_token_id,  # Pad token
                 use_cache=True,
                 stopping_criteria=stopping_criteria,
+                prompt_input_ids=prompt_input_ids
             )
-
+            
         input_token_len = input_ids.shape[1]
         n_diff_input_output = (input_ids != output_ids[:, :input_token_len]).sum().item()
-        
         if n_diff_input_output > 0:
             print(f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
         outputs = tokenizer.batch_decode(output_ids[:, input_token_len:], skip_special_tokens=True)[0]
@@ -123,7 +141,6 @@ def eval_model(args):
         if outputs.endswith(stop_str):
             outputs = outputs[:-len(stop_str)]
         outputs = outputs.strip()
-
         ans_id = shortuuid.uuid()
         ans_file.write(json.dumps({"question_id": idx,
                                    "prompt": cur_prompt,

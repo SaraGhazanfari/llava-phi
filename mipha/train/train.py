@@ -735,7 +735,7 @@ def preprocess_vision_prompt(sources, prompt_tokenizer):
         all_prompts = 'Describe this image'
     all_prompts = prompt_tokenizer(all_prompts, return_tensors="pt", padding=True)['input_ids'][:, :64]
     one_counts = (all_prompts == 1).sum(dim=1)
-    row_with_most_zeros = torch.argmin(one_counts)
+    row_with_most_zeros = torch.argmax(one_counts)
     prompt = all_prompts[row_with_most_zeros].unsqueeze(0)
 
     return torch.cat((prompt, torch.zeros((1, 64 - prompt.shape[1]), device=prompt.device, dtype=prompt.dtype)), dim=1) 
@@ -804,7 +804,7 @@ def train():
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
     local_rank = training_args.local_rank
     compute_dtype = (torch.float16 if training_args.fp16 else (torch.bfloat16 if training_args.bf16 else torch.float32))
-
+    
     bnb_model_from_pretrained_args = {}
     if training_args.bits in [4, 8]:
         from transformers import BitsAndBytesConfig
@@ -836,6 +836,7 @@ def train():
     elif "phi2" in model_args.model_name_or_path or "phi-2" in model_args.model_name_or_path \
         or "phi_2" in model_args.model_name_or_path:
         config = MiphaPhiConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
+        config.vision_config['vision_tower']['model_name_or_path'] = model_args.model_name_or_path
         model = MiphaPhiForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             config=config,
@@ -927,7 +928,7 @@ def train():
         conversation_lib.default_conversation = conversation_lib.conv_templates["phi-2_v0"]
     rank0_print("default_conversation :")
     rank0_print(conversation_lib.default_conversation)
-
+    
     vision_tower = model.get_vision_tower()
     vision_tower.to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
 
@@ -1014,7 +1015,8 @@ def train():
 
     # TODO I dont like auto resume << REMOVE IT AND UNCOMMENT THE ABOVE CODE
     trainer.train()
-
+    torch.save(trainer.model.get_vision_tower().state_dict(), 
+               os.path.join(training_args.output_dir, f'vision_tower.bin'))
     trainer.save_state()
 
     model.config.use_cache = True

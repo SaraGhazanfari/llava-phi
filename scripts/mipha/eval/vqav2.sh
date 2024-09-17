@@ -20,7 +20,7 @@ for IDX in $(seq 0 $((CHUNKS-1))); do
     CUDA_VISIBLE_DEVICES=${GPULIST[$IDX]} $SCRATCH/code/llava-phi/pytorch-example/python -m mipha.eval.model_vqa_loader \
         --model-path $MODELDIR \
         --question-file $VAST/eval/vqav2/$SPLIT.jsonl \
-        --image-folder /path/to/data/coco/test2015 \
+        --image-folder $VAST/eval/vqav2/test2015 \
         --answers-file $VAST/eval/vqav2/answers/$SPLIT/$CKPT/${CHUNKS}_${IDX}.jsonl \
         --num-chunks $CHUNKS \
         --chunk-idx $IDX \
